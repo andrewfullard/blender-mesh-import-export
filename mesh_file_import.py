@@ -3,6 +3,7 @@ import bmesh
 import mathutils
 import os
 import math
+import bpy_extras
 
 class Node:
     def __init__(self, indented_line):
@@ -103,6 +104,8 @@ def read_mesh_data(context, filepath):
     
     edit_bones = skeleton.data.edit_bones
     
+    axis_convertor = bpy_extras.io_utils.axis_conversion(from_forward='Z', from_up='-Y')
+    
     #Loop data
     for key, value in d[1].items():
         verts = []
@@ -124,22 +127,23 @@ def read_mesh_data(context, filepath):
                 try:
                     bone = entry["Point"]
                     name = get_string_value(bone[0])
-                    position = get_3list_value(bone[1])
+                    position = mathutils.Vector(get_3list_value(bone[1])) @ axis_convertor
                     b = edit_bones.new(name.strip('"'))
-                    b.head = position
-                    b.length = 1.0
+                    b.tail = (0, 10, 0)
                     direction = bone[2]["Orientation"]
-                    x = get_3list_value_unnamed(direction[0])
-                    y = get_3list_value_unnamed(direction[1])
-                    z = get_3list_value_unnamed(direction[2])
-                    rot_matrix = mathutils.Matrix([x, y, z])
-                    b.transform(rot_matrix)
+                    x = get_3list_value_unnamed(direction[0]) + (position[0], )
+                    y = get_3list_value_unnamed(direction[1]) + (position[1], )
+                    z = get_3list_value_unnamed(direction[2]) + (position[2], )
+                    last_row = (0, 0, 0, 1)
+                    bone_matrix = mathutils.Matrix((x, y, z, last_row)) @ axis_convertor.to_4x4()
+                    b.matrix = bone_matrix
                 except KeyError:
                     pass    
                   
                 try:
                     vertex = entry["Vertex"]
-                    verts.append(get_3list_value(vertex[0]))   
+                    vertex_transformed = mathutils.Vector(get_3list_value(vertex[0])) @ axis_convertor
+                    verts.append(vertex_transformed)   
                     uv0.append([get_float_value(vertex[4]), get_float_value(vertex[5])])
                     uv1.append([get_float_value(vertex[6]), get_float_value(vertex[7])])
                 except KeyError:
@@ -171,14 +175,11 @@ def read_mesh_data(context, filepath):
         for l in f.loops:
             i = l.vert.index
             loop_uv = l[uv_layer]
-            loop_uv.uv = (uv0[i][0], uv0[i][1])
+            loop_uv.uv = (uv0[i][0], 1 - uv0[i][1])
         
     
     bmesh.ops.remove_doubles(mesh, verts=mesh.verts, dist=0.0001)
     bpy.ops.object.editmode_toggle()
-    
-    for obj in bpy.context.selected_objects:
-        obj.rotation_euler[0] = math.radians(90)
     
     print("Import complete")
 

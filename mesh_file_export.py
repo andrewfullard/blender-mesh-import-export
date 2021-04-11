@@ -2,6 +2,7 @@ import bpy
 import bmesh
 import copy
 import math
+import bpy_extras
 
 test_points = [
                 ["Test", [0.12334, 343.32432, 123.576567], 
@@ -25,6 +26,7 @@ test_tris = [
             ]
 
 
+#Thanks to Gaukler for these 3 functions
 def create_export_list(collection):
     export_list = []
 
@@ -39,6 +41,28 @@ def create_export_list(collection):
                 export_list.extend(create_export_list(child))
 
     return export_list
+
+def clean_name(name):
+    # remove Blenders numbers at the end of names
+    if name[len(name) - 4:len(name) - 3] == ".":
+        cut = name[0:len(name) - 4]
+        return cut
+    else:
+        return name
+
+
+def get_export_armature(collection):
+    
+    if(collection.hide_viewport):
+        return None
+
+    for object in collection.objects:
+        if(object.type == 'ARMATURE' and object.hide_viewport == False):
+            return object
+            
+    for child in collection.children:
+        return get_export_armature(child)
+
 
 
 def write_indented(string, level):
@@ -211,19 +235,28 @@ def write_triangles(triangles):
 def write_mesh_data(context, filepath):
     print("running write_mesh_data...")
     
-    mesh_list = create_export_list(bpy.context.scene.collection)
+    collection = bpy.context.scene.collection
     
+    axis_convertor = bpy_extras.io_utils.axis_conversion(to_forward='Z', to_up='-Y')
+    
+    armature_object = get_export_armature(collection)
+    
+    if armature_object:
+        export_armature = armature_object.data
+    else:
+        export_armature = None
+    
+    mesh_list = create_export_list(collection)
+    
+    #Join mesh objects, DESTRUCTIVE
     for object in mesh_list:
         context.view_layer.objects.active = object
         object.select_set(True)
     
     bpy.ops.object.join()
     
+    #Setup mesh object
     object = context.view_layer.objects.active
-    
-    #for obj in bpy.context.selected_objects:
-    #    obj.rotation_euler[0] = math.radians(-90)
-    #    bpy.ops.object.transform_apply(rotation=True)
     
     depsgraph = context.evaluated_depsgraph_get()
     object_eval = object.evaluated_get(depsgraph)
@@ -231,6 +264,7 @@ def write_mesh_data(context, filepath):
         
     mesh.calc_tangents()
     
+    #Create bmesh
     bm = bmesh.new()
     bm.from_mesh(mesh)
     bm.verts.ensure_lookup_table()
@@ -239,16 +273,21 @@ def write_mesh_data(context, filepath):
     bmesh.ops.split_edges(bm, edges=bm.edges)
     bmesh.ops.triangulate(bm, faces=bm.faces)
     
-    #uv_layer = mesh.uv_layers.active.data
-    
     vertices = [None] * len(bm.verts)
     triangles = [None] * len(bm.faces)
     
     bm.verts.index_update()
     bm.faces.index_update()
     
-    uv_layer = bm.loops.layers.uv[0]
+    #Set up UV layers
+    uv_layer_0 = bm.loops.layers.uv[0]
     
+    if len(bm.loops.layers.uv) > 1:
+        uv_layer_1 = bm.loops.layers.uv[1]
+    else:
+        uv_layer_1 = uv_layer_0
+    
+    #Set up triangle and vert lists
     for face in bm.faces:
         face_index = face.index
         faceverts = [0] * 4
@@ -256,13 +295,13 @@ def write_mesh_data(context, filepath):
             vert = loop.vert
             index = vert.index
             faceverts[i] = index
-            vert_pos = vert.co
-            vert_normal = vert.normal
-            vert_tangent = copy.copy(mesh.loops[index].tangent)
-            vert_u0 = loop[uv_layer].uv.x
-            vert_v0 = loop[uv_layer].uv.y
-            vert_u1 = vert_u0
-            vert_v1 = vert_v0
+            vert_pos = vert.co @ axis_convertor
+            vert_normal = vert.normal @ axis_convertor
+            vert_tangent = copy.copy(mesh.loops[index].tangent @ axis_convertor)
+            vert_u0 = loop[uv_layer_0].uv.x
+            vert_v0 = 1 - loop[uv_layer_0].uv.y
+            vert_u1 = loop[uv_layer_1].uv.x
+            vert_v1 = 1 - loop[uv_layer_1].uv.y
             vertices[index] = [vert_pos, 
                         vert_normal, 
                         vert_tangent, 
@@ -273,18 +312,22 @@ def write_mesh_data(context, filepath):
                         vert_v1]
         faceverts[3] = face.material_index
         triangles[face_index] = faceverts
-            
-    #object.modifiers.remove(triangleModifier)
     
+    if export_armature:
+        points = []
+        for bone in export_armature.bones:
+            name = bone.name
+            position = (bone.head_local @ axis_convertor).to_tuple()
+            orientation = bone.matrix_local.to_3x3() @ axis_convertor
+            points.append([name, position, orientation[0].to_tuple(), orientation[1].to_tuple(),orientation[2].to_tuple()])
+    else:
+        points = []
+    
+    print(points)
+    
+    #Bounding box calculations
     bounding_box = object.bound_box
-
-    #Creating giant string, top level
-    file_out = "TXT\nMeshData\n"
     
-    #Header info
-    file_out += write_indented("maxDiffuseMipLevel 0", 1)
-    file_out += write_indented("hasValidTangents TRUE", 1)
-        
     summed_box = [xyz[0] + xyz[1] + xyz[2] for xyz in bounding_box]
     summed_sq_box = [xyz[0]**2 + xyz[1]**2 + xyz[2]**2 for xyz in bounding_box]
     
@@ -295,7 +338,14 @@ def write_mesh_data(context, filepath):
     min_ext_index = summed_box.index(min_extent)
     
     radius = math.sqrt(max(summed_sq_box))
+
+    #Creating giant string, top level
+    file_out = "TXT\nMeshData\n"
     
+    #Header info
+    file_out += write_indented("maxDiffuseMipLevel 0", 1)
+    file_out += write_indented("hasValidTangents TRUE", 1)
+       
     bounding_rad = write_labeled_float("BoundingRadius", radius)
     max_bound = write_labeled_3list("MaxBoundingExtents", bounding_box[max_ext_index])
     min_bound = write_labeled_3list("MinBoundingExtents", bounding_box[min_ext_index])
@@ -307,7 +357,7 @@ def write_mesh_data(context, filepath):
     #Important stuff; materials, bones, verts, faces
     file_out += write_materials()
     
-    file_out += write_points([])
+    file_out += write_points(points)
                                     
     file_out += write_vertices(vertices)
                             

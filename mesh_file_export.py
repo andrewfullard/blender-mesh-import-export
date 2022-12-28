@@ -64,6 +64,33 @@ def get_export_armature(collection):
         return get_export_armature(child)
 
 
+def split_UV_borders():
+    if bpy.data.workspaces.get('UV Editing') is not None:
+        bpy.context.window.workspace = bpy.data.workspaces['UV Editing']
+		bpy.ops.object.mode_set(mode='EDIT')
+        bpy.context.scene.tool_settings.use_uv_select_sync = True
+		bpy.ops.mesh.select_mode(type='EDGE')
+	    bpy.ops.mesh.select_all(action='SELECT')
+
+        bpy.ops.uv.seams_from_islands() # randomly fails for no apparent reason. Replace with bmesh implementation?
+
+	    bpy.ops.mesh.select_all(action='DESELECT')
+
+		bm = bmesh.from_edit_mesh(bpy.context.active_object.data)
+
+		for e in bm.edges:
+			if e.seam:
+				e.select_set(True)
+				
+		bmesh.update_edit_mesh(bpy.context.active_object.data)
+
+        bpy.ops.mesh.select_similar(type='SEAM')
+
+        bpy.ops.mesh.edge_split()
+        
+    else:
+        print("UV Editing workspace must exist.")
+
 
 def write_indented(string, level):
     return level * "\t" + string + "\n"   
@@ -254,6 +281,9 @@ def write_mesh_data(context, filepath):
         object.select_set(True)
     
     bpy.ops.object.join()
+
+    # select then split edges on UV island borders
+    split_UV_borders()
     
     #Setup mesh object
     object = context.view_layer.objects.active
@@ -265,12 +295,12 @@ def write_mesh_data(context, filepath):
     mesh.calc_tangents()
     
     #Create bmesh
+
     bm = bmesh.new()
     bm.from_mesh(mesh)
     bm.verts.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
-  
-    bmesh.ops.split_edges(bm, edges=bm.edges)
+
     bmesh.ops.triangulate(bm, faces=bm.faces)
     
     vertices = [None] * len(bm.verts)
@@ -323,7 +353,7 @@ def write_mesh_data(context, filepath):
     else:
         points = []
     
-    print(points)
+    # print(points)
     
     #Bounding box calculations
     bounding_box = object.bound_box

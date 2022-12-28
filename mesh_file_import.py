@@ -178,7 +178,7 @@ def read_mesh_data(context, filepath):
             loop_uv.uv = (uv0[i][0], 1 - uv0[i][1])
         
     
-    bmesh.ops.remove_doubles(mesh, verts=mesh.verts, dist=0.0001)
+    # bmesh.ops.remove_doubles(mesh, verts=mesh.verts, dist=0.0001)
     bpy.ops.object.editmode_toggle()
     
     print("Import complete")

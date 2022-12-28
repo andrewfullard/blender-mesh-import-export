@@ -3,9 +3,10 @@ import bmesh
 import copy
 import math
 import bpy_extras
+import re
 
 test_points = [
-                ["Test", [0.12334, 343.32432, 123.576567], 
+                ["Test", [0.12334, 343.32432, 123.576567],
                     [3654.12334, 123.33452, 123.576567],
                     [0.12334, 12.123, 123.45],
                     [0.12334, 23.123, 56.45]
@@ -14,7 +15,7 @@ test_points = [
 
 test_vertices = [
                     [
-                        [0.12334, 343.32432, 123.576567], 
+                        [0.12334, 343.32432, 123.576567],
                         [3654.12334, 123.33452, 123.576567],
                         [0.12334, 12.123, 123.45],
                         0, 0.2344345, 0.34554654, 0.123343, 0.123343
@@ -26,21 +27,22 @@ test_tris = [
             ]
 
 
-#Thanks to Gaukler for these 3 functions
+# Thanks to Gaukler for these 3 functions
 def create_export_list(collection):
     export_list = []
 
-    if(collection.hide_viewport):
+    if (collection.hide_viewport):
         return export_list
 
     for object in collection.objects:
-        if(object.type == 'MESH' and object.hide_viewport == False):
+        if (object.type == 'MESH' and object.hide_viewport == False):
             export_list.append(object)
-            
+
     for child in collection.children:
                 export_list.extend(create_export_list(child))
 
     return export_list
+
 
 def clean_name(name):
     # remove Blenders numbers at the end of names
@@ -52,14 +54,14 @@ def clean_name(name):
 
 
 def get_export_armature(collection):
-    
-    if(collection.hide_viewport):
+
+    if (collection.hide_viewport):
         return None
 
     for object in collection.objects:
-        if(object.type == 'ARMATURE' and object.hide_viewport == False):
+        if (object.type == 'ARMATURE' and object.hide_viewport == False):
             return object
-            
+
     for child in collection.children:
         return get_export_armature(child)
 
@@ -275,7 +277,7 @@ def write_mesh_data(context, filepath):
     
     mesh_list = create_export_list(collection)
     
-    #Join mesh objects, DESTRUCTIVE
+    # Join mesh objects, DESTRUCTIVE
     for object in mesh_list:
         context.view_layer.objects.active = object
         object.select_set(True)
@@ -285,7 +287,7 @@ def write_mesh_data(context, filepath):
     # select then split edges on UV island borders
     split_UV_borders()
     
-    #Setup mesh object
+    # Setup mesh object
     object = context.view_layer.objects.active
     
     depsgraph = context.evaluated_depsgraph_get()
@@ -294,7 +296,7 @@ def write_mesh_data(context, filepath):
         
     mesh.calc_tangents()
     
-    #Create bmesh
+    # Create bmesh
 
     bm = bmesh.new()
     bm.from_mesh(mesh)
@@ -309,7 +311,7 @@ def write_mesh_data(context, filepath):
     bm.verts.index_update()
     bm.faces.index_update()
     
-    #Set up UV layers
+    # Set up UV layers
     uv_layer_0 = bm.loops.layers.uv[0]
     
     if len(bm.loops.layers.uv) > 1:
@@ -317,7 +319,7 @@ def write_mesh_data(context, filepath):
     else:
         uv_layer_1 = uv_layer_0
     
-    #Set up triangle and vert lists
+    # Set up triangle and vert lists
     for face in bm.faces:
         face_index = face.index
         faceverts = [0] * 4
@@ -344,9 +346,15 @@ def write_mesh_data(context, filepath):
         triangles[face_index] = faceverts
     
     if export_armature:
+        pattern = re.compile('\.\d{3}$') # regex that matches a period followed by 3 digits at the end of an input
+
         points = []
         for bone in export_armature.bones:
-            name = bone.name
+            match = re.search(pattern, bone)
+            if match:
+                name = bone.name[:-4]
+            else:
+                name = bone.name
             position = (bone.head_local @ axis_convertor).to_tuple()
             orientation = bone.matrix_local.to_3x3() @ axis_convertor
             points.append([name, position, orientation[0].to_tuple(), orientation[1].to_tuple(),orientation[2].to_tuple()])
@@ -355,7 +363,7 @@ def write_mesh_data(context, filepath):
     
     # print(points)
     
-    #Bounding box calculations
+    # Bounding box calculations
     bounding_box = object.bound_box
     
     summed_box = [xyz[0] + xyz[1] + xyz[2] for xyz in bounding_box]
@@ -369,10 +377,10 @@ def write_mesh_data(context, filepath):
     
     radius = math.sqrt(max(summed_sq_box))
 
-    #Creating giant string, top level
+    # Creating giant string, top level
     file_out = "TXT\nMeshData\n"
     
-    #Header info
+    # Header info
     file_out += write_indented("maxDiffuseMipLevel 0", 1)
     file_out += write_indented("hasValidTangents TRUE", 1)
        
@@ -384,7 +392,7 @@ def write_mesh_data(context, filepath):
     file_out += write_indented(max_bound, 1)
     file_out += write_indented(min_bound, 1)
     
-    #Important stuff; materials, bones, verts, faces
+    # Important stuff; materials, bones, verts, faces
     file_out += write_materials()
     
     file_out += write_points(points)
@@ -393,7 +401,7 @@ def write_mesh_data(context, filepath):
                             
     file_out += write_triangles(triangles)                                
     
-    #Cached verts
+    # Cached verts
     cached_up = write_labeled_int("NumCachedVertexIndicesInDirection:UP", 0)
     cached_down = write_labeled_int("NumCachedVertexIndicesInDirection:DOWN", 0)
     cached_left = write_labeled_int("NumCachedVertexIndicesInDirection:LEFT", 0)
